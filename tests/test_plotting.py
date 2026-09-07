@@ -37,6 +37,10 @@ def test_plot_once_renders_both_architectures_and_ignores_partial_line(tmp_path)
     result = plot_runs(tmp_path, once=True, dpi=72)
 
     assert result == {"output": str(tmp_path), "updated": True}
+    dashboard = tmp_path / "training-comparison.png"
+    assert dashboard.stat().st_size > 0
+    assert dashboard.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert not (tmp_path / "training-comparison.tmp.png").exists()
     for architecture in ("standard", "looped"):
         image = tmp_path / architecture / "training.png"
         assert image.stat().st_size > 0
