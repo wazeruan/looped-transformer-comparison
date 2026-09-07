@@ -40,7 +40,7 @@ def main():
     p.add_argument('--output', default='runs/h100-350m-wiki103-8h')
     p.add_argument('--hours', type=float, default=8.0)
     p.add_argument('--reserve-minutes', type=float, default=5.0)
-    p.add_argument('--calibration-steps', type=int, default=8)
+    p.add_argument('--calibration-steps', type=int, default=128)
     p.add_argument('--resume', action='store_true')
     p = sub.add_parser('report')
     p.add_argument('--output', default='runs/h100-350m')

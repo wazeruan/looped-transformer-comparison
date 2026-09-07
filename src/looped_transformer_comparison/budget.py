@@ -70,7 +70,7 @@ def worker(command, log_path, deadline):
 
 
 def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
-               calibration_steps=8, resume=False):
+               calibration_steps=128, resume=False):
     if not math.isfinite(hours) or not 0 < hours <= 8:
         raise ValueError('hours must be greater than zero and at most 8 (total for both models)')
     if not math.isfinite(reserve_minutes) or not 0 < reserve_minutes * 60 < hours * 3600:

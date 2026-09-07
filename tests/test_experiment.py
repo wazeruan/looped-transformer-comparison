@@ -458,11 +458,18 @@ def test_prepare_line_semantics_and_streaming_flush(tmp_path, monkeypatch):
 
 def test_default_budget_dispatch_and_production_controls(monkeypatch):
     from looped_transformer_comparison import cli as cli_module, budget
+    import inspect
+    default_calibration_steps = inspect.signature(budget.run_budget).parameters['calibration_steps'].default
     calls = []
     monkeypatch.setattr(budget, 'run_budget', lambda *args: calls.append(args) or {})
     monkeypatch.setattr(sys, 'argv', ['looped-transformer-comparison', 'budget'])
     cli_module.main()
-    assert calls == [('configs/h100-8h.json', 'data/wikitext103', 'runs/h100-350m-wiki103-8h', 8.0, 5.0, 8, False)]
+    assert calls == [('configs/h100-8h.json', 'data/wikitext103', 'runs/h100-350m-wiki103-8h', 8.0, 5.0, 128, False)]
+    calls.clear()
+    monkeypatch.setattr(sys, 'argv', ['looped-transformer-comparison', 'budget', '--calibration-steps', '7'])
+    cli_module.main()
+    assert calls == [('configs/h100-8h.json', 'data/wikitext103', 'runs/h100-350m-wiki103-8h', 8.0, 5.0, 7, False)]
+    assert default_calibration_steps == 128
     c = json.loads((ROOT / 'configs/h100-8h.json').read_text())
     old = json.loads((ROOT / 'configs/h100.json').read_text())
     assert c['model'] == old['model']
