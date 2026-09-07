@@ -315,7 +315,8 @@ def test_h100_size_change_preserves_training_token_budget_and_small_preset():
         assert tokens_per_step == 16_384
         assert tokens_per_step * training['steps'] == 32_768_000
     assert {k: v for k, v in old['training'].items() if k not in ('batch_size', 'grad_accum')} == {
-        k: v for k, v in large['training'].items() if k not in ('batch_size', 'grad_accum')}
+        k: v for k, v in large['training'].items() if k not in ('batch_size', 'grad_accum', 'optimizer', 'muon_momentum', 'muon_nesterov', 'muon_ns_steps', 'muon_adjust_lr')}
+    assert large['training']['optimizer'] == 'muon'
 
 
 @pytest.mark.parametrize('command', ['train', 'compare', 'report'])

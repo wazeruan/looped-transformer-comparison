@@ -63,6 +63,19 @@ def read_config(path):
         raise ValueError('invalid optimizer settings')
     if t['precision'] not in ('fp32', 'bf16'):
         raise ValueError('precision must be fp32 or bf16')
+    optimizer = t.get('optimizer', 'adamw').lower()
+    if optimizer not in ('adamw', 'muon'):
+        raise ValueError('optimizer must be adamw or muon')
+    if optimizer == 'muon':
+        if not hasattr(torch.optim, 'Muon'):
+            raise ValueError('Muon requires a PyTorch build with torch.optim.Muon')
+        if not 0 <= t.get('muon_momentum', 0.95) < 1:
+            raise ValueError('muon_momentum must be in [0, 1)')
+        if not isinstance(t.get('muon_ns_steps', 5), int) or t.get('muon_ns_steps', 5) < 1:
+            raise ValueError('muon_ns_steps must be a positive integer')
+        if t.get('muon_adjust_lr', 'match_rms_adamw') not in ('original', 'match_rms_adamw', 'spectral_unclamped'):
+            raise ValueError('invalid muon_adjust_lr')
+    t['optimizer'] = optimizer
     return c
 
 
@@ -114,6 +127,41 @@ def load_checkpoint(path):
     return torch.load(path, map_location='cpu', weights_only=True)
 
 
+def build_optimizers(model, training):
+    """Build the configured optimizer recipe and return (name, optimizer map).
+
+    Muon is applied only to 2-D hidden block matrices. Embeddings, output-tied
+    weights, normalization parameters and biases use AdamW as recommended by
+    PyTorch's Muon documentation.
+    """
+    name = training.get('optimizer', 'adamw').lower()
+    if name == 'adamw':
+        return name, {'adamw': torch.optim.AdamW(model.parameters(), lr=training['lr'], weight_decay=training['weight_decay'])}
+    if name != 'muon':
+        raise ValueError('optimizer must be adamw or muon')
+    if not hasattr(torch.optim, 'Muon'):
+        raise ValueError('Muon requires a PyTorch build with torch.optim.Muon')
+    muon_params, adamw_params = [], []
+    for param_name, param in model.named_parameters():
+        if param_name.startswith('blocks.') and param_name.endswith('.weight') and param.ndim == 2:
+            muon_params.append((param_name, param))
+        else:
+            adamw_params.append(param)
+    if not muon_params or not adamw_params:
+        raise ValueError('Muon recipe could not partition model parameters')
+    muon = torch.optim.Muon(
+        muon_params,
+        lr=training['lr'],
+        weight_decay=training['weight_decay'],
+        momentum=training.get('muon_momentum', 0.95),
+        nesterov=training.get('muon_nesterov', True),
+        ns_steps=training.get('muon_ns_steps', 5),
+        adjust_lr_fn=training.get('muon_adjust_lr', 'match_rms_adamw'),
+    )
+    adamw = torch.optim.AdamW(adamw_params, lr=training['lr'], weight_decay=training['weight_decay'])
+    return name, {'muon': muon, 'adamw': adamw}
+
+
 def train(config_path, data_dir, output, architecture, resume=False, stop_after=None, calibration=False):
     c = read_config(config_path)
     t = c['training']
@@ -130,7 +178,7 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
     seed_all(t['seed'])
     model = LanguageModel(ModelConfig(**c['model']), architecture).to(device)
     seed_all(t['seed'] + 2000)  # Same stochastic-training RNG after unequal model construction.
-    optimizer = torch.optim.AdamW(model.parameters(), lr=t['lr'], weight_decay=t['weight_decay'])
+    optimizer_name, optimizers = build_optimizers(model, t)
     generator = torch.Generator().manual_seed(t['seed'] + 1000)
     step, best_loss, train_seconds = 0, float('inf'), 0.0
     if resume:
@@ -138,7 +186,10 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
         if ck['config'] != c or ck['manifest'] != manifest or ck['architecture'] != architecture or ck.get('calibration', False) != calibration:
             raise ValueError('resume config, data or architecture mismatch')
         model.load_state_dict(ck['model'])
-        optimizer.load_state_dict(ck['optimizer'])
+        if ck.get('optimizer_name') != optimizer_name or set(ck.get('optimizers', {})) != set(optimizers):
+            raise ValueError('resume optimizer mismatch')
+        for name, optimizer in optimizers.items():
+            optimizer.load_state_dict(ck['optimizers'][name])
         step, best_loss, train_seconds = ck['step'], ck['best_loss'], ck['train_seconds']
         generator.set_state(ck['batch_rng'])
         torch.set_rng_state(ck['torch_rng'])
@@ -151,7 +202,8 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
                 'parameters': sum(p.numel() for p in model.parameters()), 'effective_depth': model.config.depth,
                 'unique_layers': len(model.blocks), 'device': str(device), 'torch': str(torch.__version__),
                 'python': platform.python_version(), 'cuda': torch.version.cuda,
-                'gpu': torch.cuda.get_device_name(device) if device.type == 'cuda' else None}
+                'gpu': torch.cuda.get_device_name(device) if device.type == 'cuda' else None,
+                'optimizer': optimizer_name}
     (out / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
     if device.type == 'cuda':
         torch.cuda.reset_peak_memory_stats(device)
@@ -163,10 +215,12 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
         while step < target:
             synchronize(device)
             start = time.perf_counter()
-            optimizer.zero_grad(set_to_none=True)
+            for optimizer in optimizers.values():
+                optimizer.zero_grad(set_to_none=True)
             lr = learning_rate(step, t)
-            for group in optimizer.param_groups:
-                group['lr'] = lr
+            for optimizer in optimizers.values():
+                for group in optimizer.param_groups:
+                    group['lr'] = lr
             train_loss = 0.0
             for _ in range(t['grad_accum']):
                 x, y = batch(streams['train'], t['batch_size'], model.config.seq_len, generator, device)
@@ -178,7 +232,8 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
                 (loss / t['grad_accum']).backward()
                 train_loss += loss.detach().item() / t['grad_accum']
             torch.nn.utils.clip_grad_norm_(model.parameters(), t['grad_clip'], error_if_nonfinite=True)
-            optimizer.step()
+            for optimizer in optimizers.values():
+                optimizer.step()
             synchronize(device)
             train_seconds += time.perf_counter() - start
             step += 1
@@ -188,7 +243,8 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
                 record['validation'] = val
                 improved = val['loss'] < best_loss
                 best_loss = min(best_loss, val['loss'])
-                ck = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'step': step,
+                ck = {'model': model.state_dict(), 'optimizers': {name: optimizer.state_dict() for name, optimizer in optimizers.items()},
+                      'optimizer_name': optimizer_name, 'step': step,
                       'best_loss': best_loss, 'train_seconds': train_seconds, 'config': c, 'manifest': manifest,
                       'architecture': architecture, 'calibration': calibration, 'batch_rng': generator.get_state(),
                       'torch_rng': torch.get_rng_state(),

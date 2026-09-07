@@ -22,6 +22,11 @@
     "log_every": 10,
     "seed": 42,
     "device": "auto",
-    "precision": "bf16"
+    "precision": "bf16",
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_nesterov": true,
+    "muon_ns_steps": 5,
+    "muon_adjust_lr": "match_rms_adamw"
   }
 }

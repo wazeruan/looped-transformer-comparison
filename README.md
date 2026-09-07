@@ -18,7 +18,9 @@ Headless, single-GPU language-model training from scratch on **WikiText-103**, t
 
 `loop_layers * loops == depth` is enforced. The looped model passes hidden states through the same stack repeatedly, with full gradient flow and no additional loop-specific parameters. Both use pre-norm LayerNorm, causal SDPA attention, GELU MLPs with 4× expansion, learned positions added once, tied token/output embeddings and zero dropout. Each head has 64 dimensions. There is no KV cache.
 
-This matches effective depth, width, tokenizer, batches, optimizer, learning-rate schedule and training tokens. **Unique parameter counts differ.** Optimizer cost, kernels and wall time can differ too; giving each model exactly four hours would not guarantee equal training tokens. Shared parameters accumulate gradients from every use, and repeated depth still requires activation memory.
+This matches effective depth, width, tokenizer, batches, optimizer recipe, learning-rate schedule and training tokens. **Unique parameter counts differ.** Optimizer cost, kernels and wall time can differ too; giving each model exactly four hours would not guarantee equal training tokens. Shared parameters accumulate gradients from every use, and repeated depth still requires activation memory.
+
+The production H100 presets use PyTorch **Muon** for the 2-D weight matrices inside transformer blocks and AdamW for embeddings, the tied output weight, LayerNorm parameters and biases. This follows Muon's supported parameter shape and keeps one controlled recipe across both architectures. Muon uses `match_rms_adamw` and shares the scheduled learning rate and weight decay with the AdamW group. Checkpoints and `result.json` record the optimizer recipe. Set `"optimizer": "adamw"` in a copied config for an explicit all-parameter AdamW baseline; CPU smoke tests retain that fallback because Muon requires a recent PyTorch build.
 
 Both runs use identical seeded batch sequences. Token/position weights and the first six blocks share initial values at the same seed; remaining standard blocks initialize independently. Each model has its own optimizer. GPU execution is not claimed bitwise deterministic. Use multiple seeds for reliable research conclusions.
 
@@ -42,17 +44,13 @@ The lock selects PyTorch 2.14.0 with CUDA 13 Linux dependencies and glibc 2.28+ 
 `scripts/train.sh` begins with the same hardware check and exits before calibration or run-directory creation unless the selected CUDA device reports H100, exposes at least 75 GiB, and supports BF16. This catches SSH login nodes, CPU-only PyTorch installations, other GPU types, and restricted H100 partitions. On a scheduled cluster, run it inside an H100 allocation through `sbatch scripts/train.sbatch`.
 
 ```bash
-# Keep running after an SSH disconnect:
-nohup ./scripts/train.sh > training.log 2>&1 &
-# Or submit from the repository root after preparation:
+# Submit from the repository root after preparation:
 sbatch scripts/train.sbatch
-# Explicit GPU outside Slurm:
-CUDA_VISIBLE_DEVICES=0 ./scripts/train.sh --output runs/wiki103-seed42-8h
 # Shorter total budget:
-./scripts/train.sh --hours 4 --output runs/wiki103-4h
+sbatch --time=04:00:00 scripts/train.sbatch --hours 4 --output runs/wiki103-4h
 ```
 
-Run one of these alternatives, not simultaneous jobs writing the same directory. The Slurm example requests `08:00:00`, one GPU, eight CPUs and 32GB host RAM; adapt the partition/account to your cluster. Scheduler setup/check time is also inside that allocation, so the scheduler remains the ultimate hard limit. The runner honors `CUDA_VISIBLE_DEVICES`.
+Run one of these alternatives, not simultaneous jobs writing the same directory. The Slurm example requests `08:00:00`, one GPU, eight CPUs and 32GB host RAM; adapt the partition/account to your cluster. Scheduler setup/check time is also inside that allocation, so the scheduler remains the ultimate hard limit. Slurm controls device visibility.
 
 ## How the eight-hour budget works
 
@@ -117,7 +115,7 @@ To render or refresh graphs for an existing run:
 
 The plotting command is a one-shot CPU operation and does not modify checkpoints or metrics. It tolerates an incomplete final JSONL line, which is useful after an interrupted job. For a completed run, the graph files remain in the run directory for download or inspection.
 
-Results report parameter counts, held-out loss/perplexity, training tokens, training-only throughput and peak CUDA allocation. Training time synchronizes CUDA and includes batch construction/optimizer work, excluding evaluation and saving. Peak allocation includes evaluation, can vary after resume, and is not total process VRAM.
+Results report parameter counts, the optimizer recipe, held-out loss/perplexity, training tokens, training-only throughput and peak CUDA allocation. Training time synchronizes CUDA and includes batch construction/optimizer work, excluding evaluation and saving. Peak allocation includes evaluation, can vary after resume, and is not total process VRAM.
 
 ```bash
 ./scripts/evaluate.sh --checkpoint runs/h100-350m-wiki103-8h/standard/best.pt
@@ -132,7 +130,7 @@ uv run python -m looped_transformer_comparison.cli train --architecture standard
 
 Standalone evaluation uses FP32 for portability; main H100 reports use configured BF16, so small numerical differences are expected. Generation checks tokenizer identity and rolls the context window.
 
-**Resources:** standard FP32 parameters, gradients and Adam moments alone take about 5.6GB; activations, logits, attention workspace and temporary copies require more. H100 peak memory/runtime remain unmeasured. Allow roughly 40–50GB disk for CUDA dependencies/caches, the larger prepared dataset, calibration and main checkpoints (estimate). Model training uses microbatch 4 and accumulation 16. If adjusting memory use, change these inversely to retain 16,384 tokens/step in both arms. There is no multi-GPU implementation.
+**Resources:** standard FP32 parameters and gradients plus optimizer state take several GB; activations, logits, attention workspace and temporary copies require more. H100 peak memory/runtime remain unmeasured. Allow roughly 40–50GB disk for CUDA dependencies/caches, the larger prepared dataset, calibration and main checkpoints (estimate). Model training uses microbatch 4 and accumulation 16. If adjusting memory use, change these inversely to retain 16,384 tokens/step in both arms. There is no multi-GPU implementation.
 
 ## Local verification and variants
 
