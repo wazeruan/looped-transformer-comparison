@@ -76,3 +76,11 @@ An executable wrapper test substitutes `uv`, records invocations, and forces the
 Both the installed `looped-transformer-comparison check` entry point and `python -m looped_transformer_comparison.cli check` return valid JSON without a `RuntimeWarning`. The installed launcher initially reflected the prior package entry point until `uv sync --locked` regenerated it. Repository scripts invoke the module directly through the project environment, avoiding dependence on stale generated console-launcher contents after a source update.
 
 All GPU capability outcomes above are mocked control-flow tests. No physical H100, CUDA kernel, BF16 computation, MIG allocation, Slurm scheduling, GPU memory measurement, throughput measurement, or production training run was available for this verification.
+
+## Live training plots
+
+Independently verified 2026-09-07 on macOS, Python 3.12, CPU only, with the noninteractive Matplotlib Agg backend. Four focused plotting tests pass, and the full suite passes (**42 passed in 19.21 seconds**).
+
+Synthetic flushed `metrics.jsonl` logs for both architectures render nonempty PNG files at `standard/training.png` and `looped/training.png`. The reader ignores an incomplete final JSONL line, and writes each image through a temporary file before atomically replacing the published image. Missing logs return cleanly without creating run state. The generated four-panel figure contains training/validation loss, validation perplexity, learning-rate schedule, and cumulative token progress.
+
+The `plot --once` CLI emits one valid JSON result, supports `--dpi`, and does not require a display. The `--watch` mode repeatedly rereads flushed metrics at the configured interval; `scripts/plot.sbatch` requests a CPU Slurm allocation and invokes it. Both plot launchers pass `bash -n`, and `uv lock --check` succeeds. No checkpoints or training data are modified by plotting. Live H100 rendering, multi-hour watch execution, and cluster filesystem behavior remain unverified.

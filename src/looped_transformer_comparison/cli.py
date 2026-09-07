@@ -44,6 +44,12 @@ def main():
     p.add_argument('--resume', action='store_true')
     p = sub.add_parser('report')
     p.add_argument('--output', default='runs/h100-350m')
+    p = sub.add_parser('plot')
+    p.add_argument('--output', default='runs/h100-350m-wiki103-8h')
+    p.add_argument('--watch', action='store_true', help='keep polling metrics.jsonl until interrupted')
+    p.add_argument('--interval', type=float, default=30.0, help='poll interval in seconds')
+    p.add_argument('--once', action='store_true', help='render once even with --watch')
+    p.add_argument('--dpi', type=int, default=130)
     p = sub.add_parser('evaluate')
     p.add_argument('--checkpoint', required=True)
     p.add_argument('--data', default='data/wikitext103')
@@ -88,6 +94,11 @@ def main():
         print(json.dumps(comparison(root), indent=2))
     elif a.command == 'report':
         print(json.dumps(comparison(a.output), indent=2))
+    elif a.command == 'plot':
+        if a.dpi < 72:
+            parser.error('--dpi must be at least 72')
+        from .plotting import plot_runs
+        print(json.dumps(plot_runs(a.output, a.watch, a.interval, a.once, a.dpi), indent=2))
     elif a.command == 'evaluate':
         if a.batch_size < 1:
             parser.error('--batch-size must be positive')
