@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _records(path: Path):
-    records = []
+    records = {}
     if not path.exists():
         return records
     for line in path.read_text().splitlines():
@@ -16,8 +16,10 @@ def _records(path: Path):
         except json.JSONDecodeError:
             continue
         if isinstance(record, dict) and isinstance(record.get('step'), int):
-            records.append(record)
-    return records
+            # Resume can append a step that was logged before the last
+            # checkpoint; retain the newest complete record for that step.
+            records[record['step']] = record
+    return [records[step] for step in sorted(records)]
 
 
 def _metadata(run: Path):

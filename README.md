@@ -105,24 +105,17 @@ Validation covers every next-token target once in fixed non-overlapping windows,
 
 Each main architecture directory contains `metadata.json`, `metrics.jsonl`, `last.pt`, `best.pt` and, on completion, `result.json`. The parent holds `budget.json`, `resolved-config.json`, logs, disposable `calibration/` runs and, only after successful paired completion, `comparison.json` / `comparison.md`.
 
-## Live training graphs
+## Final training graphs
 
-Every flushed metrics record contains the optimizer step, training loss and learning rate; validation records also contain validation loss and perplexity. The plotting command reads those files without touching model state and atomically refreshes `standard/training.png`, `looped/training.png`, and the side-by-side `training-comparison.png`. Each image has four panels: training/validation loss, validation perplexity, learning-rate schedule, and cumulative training tokens.
+Every optimizer step is now written to `metrics.jsonl`; console output remains throttled by `log_every`. After both models complete, the comparison command automatically reads the full logs and atomically writes `standard/training.png`, `looped/training.png`, and the side-by-side `training-comparison.png`. Each image has four panels: training/validation loss, validation perplexity, learning-rate schedule, and cumulative training tokens. This means the final graphs contain every optimizer step, including steps between validation checkpoints.
 
-Submit the watcher as a small CPU Slurm job after submitting training:
-
-```bash
-sbatch scripts/train.sbatch --output runs/h100-350m-wiki103-8h-cal128
-sbatch scripts/plot.sbatch --output runs/h100-350m-wiki103-8h-cal128 --interval 30
-```
-
-The watcher can start before metrics exist and renders as soon as complete JSONL records arrive. Stop it with `scancel <plot-job-id>` after training finishes; the last images remain available. To render once after a run:
+To render or refresh graphs for an existing run:
 
 ```bash
 ./scripts/plot.sh --output runs/h100-350m-wiki103-8h-cal128 --once
 ```
 
-If your cluster allows additional steps in an existing allocation, `srun --jobid <train-job-id> --cpus-per-task=1 --mem=2G ./scripts/plot.sh --output runs/... --watch` is also suitable. Do not use a login-node polling process.
+The plotting command is a one-shot CPU operation and does not modify checkpoints or metrics. It tolerates an incomplete final JSONL line, which is useful after an interrupted job. For a completed run, the graph files remain in the run directory for download or inspection.
 
 Results report parameter counts, held-out loss/perplexity, training tokens, training-only throughput and peak CUDA allocation. Training time synchronizes CUDA and includes batch construction/optimizer work, excluding evaluation and saving. Peak allocation includes evaluation, can vary after resume, and is not total process VRAM.
 

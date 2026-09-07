@@ -159,46 +159,47 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
     if target < 1:
         raise ValueError('stop_after must be positive')
     model.train()
-    while step < target:
-        synchronize(device)
-        start = time.perf_counter()
-        optimizer.zero_grad(set_to_none=True)
-        lr = learning_rate(step, t)
-        for group in optimizer.param_groups:
-            group['lr'] = lr
-        train_loss = 0.0
-        for _ in range(t['grad_accum']):
-            x, y = batch(streams['train'], t['batch_size'], model.config.seq_len, generator, device)
-            with amp(device, t['precision']):
-                logits = model(x)
-                loss = F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), y.reshape(-1))
-            if not torch.isfinite(loss):
-                raise RuntimeError(f'non-finite training loss at step {step + 1}')
-            (loss / t['grad_accum']).backward()
-            train_loss += loss.detach().item() / t['grad_accum']
-        torch.nn.utils.clip_grad_norm_(model.parameters(), t['grad_clip'], error_if_nonfinite=True)
-        optimizer.step()
-        synchronize(device)
-        train_seconds += time.perf_counter() - start
-        step += 1
-        record = {'step': step, 'train_loss': train_loss, 'lr': lr}
-        if step % t['eval_every'] == 0 or step == target:
-            val = evaluate(model, streams['validation'], t['batch_size'], device, t['precision'])
-            record['validation'] = val
-            improved = val['loss'] < best_loss
-            best_loss = min(best_loss, val['loss'])
-            ck = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'step': step,
-                  'best_loss': best_loss, 'train_seconds': train_seconds, 'config': c, 'manifest': manifest,
-                  'architecture': architecture, 'calibration': calibration, 'batch_rng': generator.get_state(),
-                  'torch_rng': torch.get_rng_state(),
-                  'cuda_rng': torch.cuda.get_rng_state_all() if device.type == 'cuda' else []}
-            save_checkpoint(out / 'last.pt', ck)
-            if improved:
-                save_checkpoint(out / 'best.pt', ck)
-        if step % t['log_every'] == 0 or 'validation' in record:
-            print(json.dumps(record), flush=True)
-            with (out / 'metrics.jsonl').open('a') as f:
-                f.write(json.dumps(record) + '\n')
+    with (out / 'metrics.jsonl').open('a', buffering=1) as metrics_file:
+        while step < target:
+            synchronize(device)
+            start = time.perf_counter()
+            optimizer.zero_grad(set_to_none=True)
+            lr = learning_rate(step, t)
+            for group in optimizer.param_groups:
+                group['lr'] = lr
+            train_loss = 0.0
+            for _ in range(t['grad_accum']):
+                x, y = batch(streams['train'], t['batch_size'], model.config.seq_len, generator, device)
+                with amp(device, t['precision']):
+                    logits = model(x)
+                    loss = F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), y.reshape(-1))
+                if not torch.isfinite(loss):
+                    raise RuntimeError(f'non-finite training loss at step {step + 1}')
+                (loss / t['grad_accum']).backward()
+                train_loss += loss.detach().item() / t['grad_accum']
+            torch.nn.utils.clip_grad_norm_(model.parameters(), t['grad_clip'], error_if_nonfinite=True)
+            optimizer.step()
+            synchronize(device)
+            train_seconds += time.perf_counter() - start
+            step += 1
+            record = {'step': step, 'train_loss': train_loss, 'lr': lr}
+            if step % t['eval_every'] == 0 or step == target:
+                val = evaluate(model, streams['validation'], t['batch_size'], device, t['precision'])
+                record['validation'] = val
+                improved = val['loss'] < best_loss
+                best_loss = min(best_loss, val['loss'])
+                ck = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'step': step,
+                      'best_loss': best_loss, 'train_seconds': train_seconds, 'config': c, 'manifest': manifest,
+                      'architecture': architecture, 'calibration': calibration, 'batch_rng': generator.get_state(),
+                      'torch_rng': torch.get_rng_state(),
+                      'cuda_rng': torch.cuda.get_rng_state_all() if device.type == 'cuda' else []}
+                save_checkpoint(out / 'last.pt', ck)
+                if improved:
+                    save_checkpoint(out / 'best.pt', ck)
+            # Persist every optimizer step; stdout remains throttled by log_every.
+            metrics_file.write(json.dumps(record) + '\n')
+            if step % t['log_every'] == 0 or 'validation' in record:
+                print(json.dumps(record), flush=True)
     if step < t['steps']:
         return {'status': 'paused', 'step': step}
     ck = load_checkpoint(out / 'best.pt')
@@ -231,4 +232,7 @@ def comparison(root):
     for r in results:
         lines.append(f"| {r['architecture']} | {r['unique_layers']} | {r['effective_depth']} | {r['parameters']:,} | {r['train_tokens']:,} | {r['test']['loss']:.4f} | {r['test']['perplexity']:.4f} |")
     (root / 'comparison.md').write_text('\n'.join(lines) + '\n')
+    # A completed comparison always gets the final, full-step plots.
+    from .plotting import plot_runs
+    plot_runs(root, once=True)
     return report
