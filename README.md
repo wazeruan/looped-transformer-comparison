@@ -63,6 +63,17 @@ The aim is to use most of the eight-hour allocation, typically with some headroo
 
 Progress is flushed to `training.log` (when redirected), per-model `standard.log` / `looped.log`, and each model's `metrics.jsonl`. `budget.json` stores measured timings, the planned tokens, the original deadline and completion/incomplete status. Use `tail -f runs/h100-350m-wiki103-8h/standard.log` to watch the active arm.
 
+### Parameter and compute matched runs
+
+Use the parameter-matched preset when you want both models near the standard model's 350M parameters. It keeps the standard model at width 1,088 and uses a looped width of 2,148 with 12 heads (the override is recorded in each result). To allocate equal measured training time rather than equal optimizer steps, pass `--compute-matched`; calibration then gives each architecture its own step count and writes `resolved-config-standard.json` and `resolved-config-looped.json`.
+
+```bash
+sbatch scripts/train.sbatch --config configs/h100-param-matched-8h.json \
+  --output runs/param-compute-matched --compute-matched
+```
+
+In this mode, token totals can differ by design. The comparison report checks the shared data and optimizer recipe, reports each architecture's actual tokens and steps, and still produces the full training graphs.
+
 ## Interruptions and resume
 
 ```bash

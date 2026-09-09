@@ -4,13 +4,13 @@ from pathlib import Path
 import torch
 from tokenizers import Tokenizer
 from .data import prepare, load_data, digest
-from .engine import train, comparison, load_checkpoint, device_for, evaluate
+from .engine import train, comparison, load_checkpoint, device_for, evaluate, model_config_for
 from .model import LanguageModel, ModelConfig
 
 
 def restored(checkpoint, device):
     ck = load_checkpoint(checkpoint)
-    model = LanguageModel(ModelConfig(**ck['config']['model']), ck['architecture']).to(device)
+    model = LanguageModel(model_config_for(ck['config'], ck['architecture']), ck['architecture']).to(device)
     model.load_state_dict(ck['model'])
     model.eval()
     return model, ck
@@ -42,6 +42,8 @@ def main():
     p.add_argument('--reserve-minutes', type=float, default=5.0)
     p.add_argument('--calibration-steps', type=int, default=128)
     p.add_argument('--resume', action='store_true')
+    p.add_argument('--compute-matched', action='store_true',
+                   help='allocate equal measured training time per architecture; steps/tokens may differ')
     p = sub.add_parser('report')
     p.add_argument('--output', default='runs/h100-350m')
     p = sub.add_parser('plot')
@@ -76,7 +78,10 @@ def main():
         print(json.dumps(train(a.config, a.data, a.output, a.architecture, a.resume, a.stop_after, **kwargs), indent=2))
     elif a.command == 'budget':
         from .budget import run_budget
-        print(json.dumps(run_budget(a.config, a.data, a.output, a.hours, a.reserve_minutes, a.calibration_steps, a.resume), indent=2))
+        args = (a.config, a.data, a.output, a.hours, a.reserve_minutes, a.calibration_steps, a.resume)
+        if a.compute_matched:
+            args += (True,)
+        print(json.dumps(run_budget(*args), indent=2))
     elif a.command == 'compare':
         root = Path(a.output)
         # Reject occupied destinations before starting either architecture.
@@ -93,7 +98,10 @@ def main():
                 torch.cuda.empty_cache()
         print(json.dumps(comparison(root), indent=2))
     elif a.command == 'report':
-        print(json.dumps(comparison(a.output), indent=2))
+        budget = Path(a.output) / 'budget.json'
+        matched = json.loads(budget.read_text()).get('compute_matched', False) if budget.exists() else False
+        report = comparison(a.output, allow_unequal_tokens=True) if matched else comparison(a.output)
+        print(json.dumps(report, indent=2))
     elif a.command == 'plot':
         if a.dpi < 72:
             parser.error('--dpi must be at least 72')

@@ -127,6 +127,12 @@ def load_checkpoint(path):
     return torch.load(path, map_location='cpu', weights_only=True)
 
 
+def model_config_for(config, architecture):
+    values = dict(config['model'])
+    values.update(config.get('model_overrides', {}).get(architecture, {}))
+    return ModelConfig(**values)
+
+
 def build_optimizers(model, training):
     """Build the configured optimizer recipe and return (name, optimizer map).
 
@@ -176,7 +182,8 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
     if resume and not (out / 'last.pt').exists():
         raise ValueError('resume requires last.pt')
     seed_all(t['seed'])
-    model = LanguageModel(ModelConfig(**c['model']), architecture).to(device)
+    model_config = model_config_for(c, architecture)
+    model = LanguageModel(model_config, architecture).to(device)
     seed_all(t['seed'] + 2000)  # Same stochastic-training RNG after unequal model construction.
     optimizer_name, optimizers = build_optimizers(model, t)
     generator = torch.Generator().manual_seed(t['seed'] + 1000)
@@ -199,7 +206,7 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
             raise ValueError('resume requires best.pt alongside last.pt')
     out.mkdir(parents=True, exist_ok=True)
     metadata = {'architecture': architecture, 'config': c, 'manifest': manifest,
-                'parameters': sum(p.numel() for p in model.parameters()), 'effective_depth': model.config.depth,
+                'parameters': sum(p.numel() for p in model.parameters()), 'model': dataclasses.asdict(model_config), 'effective_depth': model.config.depth,
                 'unique_layers': len(model.blocks), 'device': str(device), 'torch': str(torch.__version__),
                 'python': platform.python_version(), 'cuda': torch.version.cuda,
                 'gpu': torch.cuda.get_device_name(device) if device.type == 'cuda' else None,
@@ -270,16 +277,23 @@ def train(config_path, data_dir, output, architecture, resume=False, stop_after=
     return result
 
 
-def comparison(root):
+def comparison(root, allow_unequal_tokens=False):
     root = Path(root)
     results = [json.loads((root / a / 'result.json').read_text()) for a in ('standard', 'looped')]
     a, b = results
-    if a['config'] != b['config'] or a['manifest'] != b['manifest'] or a['train_tokens'] != b['train_tokens']:
+    def comparable_config(config):
+        value = dict(config)
+        value['training'] = {k: v for k, v in config['training'].items() if k not in ('steps', 'warmup_steps')}
+        return value
+    if comparable_config(a['config']) != comparable_config(b['config']) or a['manifest'] != b['manifest'] or (not allow_unequal_tokens and a['train_tokens'] != b['train_tokens']):
         raise ValueError('comparison requires identical configs, data and token budgets')
     for result, arch in zip(results, ('standard', 'looped')):
         if result['status'] != 'complete' or result['architecture'] != arch:
             raise ValueError('comparison requires both completed architectures')
-    report = {'note': 'Matched effective depth and token budget; unique parameter counts differ. Single-seed results are not statistical evidence.',
+    note = ('Matched effective depth, parameter count and measured compute budget; optimizer steps and token budgets may differ. '
+            if allow_unequal_tokens else
+            'Matched effective depth and token budget; unique parameter counts may differ.')
+    report = {'note': note + ' Single-seed results are not statistical evidence.',
               'runs': results, 'looped_minus_standard_test_loss': b['test']['loss'] - a['test']['loss']}
     (root / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = ['# Matched-depth comparison', '', report['note'], '',

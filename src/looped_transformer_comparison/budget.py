@@ -19,7 +19,8 @@ def write_json(path, value):
     os.replace(temp, path)
 
 
-def planned_steps(measurements, remaining_seconds, reserve_seconds, eval_every, max_steps, safety=1.05):
+def planned_steps(measurements, remaining_seconds, reserve_seconds, eval_every, max_steps, safety=1.05,
+                  compute_matched=False):
     """Overhead estimate conservatively includes init, validation, test and saves."""
     if len(measurements) != 2 or not 0 < reserve_seconds < remaining_seconds:
         raise ValueError('Insufficient budget after calibration and reserve')
@@ -41,9 +42,34 @@ def planned_steps(measurements, remaining_seconds, reserve_seconds, eval_every, 
             high = mid - 1
     if low < 2:
         raise ValueError('Not enough time for both models; increase budget or reduce configuration')
-    return {'steps': low, 'predicted_main_seconds': estimate(low),
+    result = {'steps': low, 'predicted_main_seconds': estimate(low),
             'pair_train_seconds_per_step': step_seconds, 'pair_overhead_seconds': overhead,
             'safety_factor': safety}
+    if compute_matched:
+        available = (remaining_seconds - reserve_seconds) / safety
+        per_arch = []
+        for measurement in measurements:
+            step = measurement['train_seconds'] / measurement['steps']
+            overhead_arch = max(0.0, measurement['wall_seconds'] - measurement['train_seconds'])
+            budget_arch = available / 2
+            def estimate_arch(n):
+                return n * step + (math.ceil(n / eval_every) + 1) * overhead_arch
+            low, high = 0, max_steps
+            while low < high:
+                mid = (low + high + 1) // 2
+                if estimate_arch(mid) <= budget_arch:
+                    low = mid
+                else:
+                    high = mid - 1
+            if low < 2:
+                raise ValueError('Not enough time for two compute-matched architectures')
+            per_arch.append(low)
+        result['steps_by_architecture'] = {'standard': per_arch[0], 'looped': per_arch[1]}
+        result['predicted_main_seconds'] = safety * sum(
+            per_arch[i] * measurements[i]['train_seconds'] / measurements[i]['steps']
+            + (math.ceil(per_arch[i] / eval_every) + 1) * max(0.0, measurements[i]['wall_seconds'] - measurements[i]['train_seconds'])
+            for i in range(2))
+    return result
 
 
 def worker(command, log_path, deadline):
@@ -70,7 +96,7 @@ def worker(command, log_path, deadline):
 
 
 def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
-               calibration_steps=128, resume=False):
+               calibration_steps=128, resume=False, compute_matched=False):
     if not math.isfinite(hours) or not 0 < hours <= 8:
         raise ValueError('hours must be greater than zero and at most 8 (total for both models)')
     if not math.isfinite(reserve_minutes) or not 0 < reserve_minutes * 60 < hours * 3600:
@@ -81,7 +107,8 @@ def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
     config = read_config(config_path)
     identity = {'config': config, 'data_directory': str(data_dir),
                 'manifest_sha256': digest(data_dir / 'manifest.json'), 'hours': hours,
-                'reserve_minutes': reserve_minutes, 'calibration_steps': calibration_steps}
+                'reserve_minutes': reserve_minutes, 'calibration_steps': calibration_steps,
+                'compute_matched': compute_matched}
     state_path = root / 'budget.json'
     if resume:
         if not state_path.exists():
@@ -90,7 +117,7 @@ def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
         if state['identity'] != identity:
             raise ValueError('Budget resume settings/data mismatch')
         if state['status'] == 'complete':
-            return comparison(root)
+            return comparison(root, allow_unequal_tokens=state.get('compute_matched', False))
     else:
         if root.exists() and any(root.iterdir()):
             raise ValueError('Output is not empty; use --resume or a new output directory')
@@ -135,13 +162,22 @@ def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
                                               'train_seconds': result['train_seconds'], 'steps': result['steps']})
                 write_json(state_path, state)
             plan = planned_steps(state['measurements'], deadline - time.time(), reserve_minutes * 60,
-                                 config['training']['eval_every'], config['training']['steps'])
+                                 config['training']['eval_every'], config['training']['steps'],
+                                 compute_matched=compute_matched)
             resolved = copy.deepcopy(config)
             resolved['training']['steps'] = plan['steps']
             resolved['training']['warmup_steps'] = min(config['training']['warmup_steps'], max(1, plan['steps'] // 20))
-            plan['tokens_per_model'] = plan['steps'] * config['training']['batch_size'] * config['training']['grad_accum'] * config['model']['seq_len']
+            tokens_per_step = config['training']['batch_size'] * config['training']['grad_accum'] * config['model']['seq_len']
+            plan['tokens_per_model'] = (plan['steps'] * tokens_per_step if not compute_matched else
+                                        {a: n * tokens_per_step for a, n in plan['steps_by_architecture'].items()})
             state.update(plan=plan, status='training')
             write_json(root / 'resolved-config.json', resolved)
+            if compute_matched:
+                for arch, steps in plan['steps_by_architecture'].items():
+                    arch_config = copy.deepcopy(resolved)
+                    arch_config['training']['steps'] = steps
+                    arch_config['training']['warmup_steps'] = min(arch_config['training']['warmup_steps'], max(1, steps // 20))
+                    write_json(root / f'resolved-config-{arch}.json', arch_config)
             write_json(state_path, state)
             print(json.dumps(plan, indent=2), flush=True)
         for arch in ('standard', 'looped'):
@@ -151,8 +187,9 @@ def run_budget(config_path, data_dir, output, hours=8.0, reserve_minutes=5.0,
             if path.exists() and not (path / 'last.pt').exists():
                 raise ValueError(f'{arch} interrupted before first checkpoint; use a fresh output')
             print(f'Training {arch}; log: {root / (arch + ".log")}', flush=True)
-            worker(command(root / 'resolved-config.json', path, arch), root / f'{arch}.log', deadline)
-        report = comparison(root)
+            cfg = root / f'resolved-config-{arch}.json' if compute_matched else root / 'resolved-config.json'
+            worker(command(cfg, path, arch), root / f'{arch}.log', deadline)
+        report = comparison(root, allow_unequal_tokens=compute_matched)
         state.update(status='complete', elapsed_seconds=time.time() - state['started_unix'])
         write_json(state_path, state)
         return report
