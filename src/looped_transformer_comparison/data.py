@@ -17,12 +17,49 @@ def digest(path):
     return h.hexdigest()
 
 
-def prepare(output, vocab_size=8192, local_dir=None, dataset_config='wikitext-103-raw-v1'):
+def _mixture_rows(sources):
+    from datasets import load_dataset
+    active = []
+    for source in sources:
+        required = {'dataset', 'split'}
+        if missing := required - set(source):
+            raise ValueError(f'mixture source missing: {", ".join(sorted(missing))}')
+        rows = load_dataset(source['dataset'], source.get('config'), split=source['split'],
+                            revision=source.get('revision'), streaming=source.get('streaming', True))
+        limit = source.get('max_rows')
+        if limit is not None and (not isinstance(limit, int) or limit < 1):
+            raise ValueError('mixture max_rows must be a positive integer')
+        active.append((iter(rows), source.get('text_field', 'text'), int(source.get('weight', 1)), limit))
+    if not active or any(weight < 1 for _, _, weight, _ in active):
+        raise ValueError('mixture needs non-empty sources with positive integer weights')
+    while active:
+        remaining = []
+        for iterator, field, weight, limit in active:
+            try:
+                for _ in range(weight):
+                    if limit is not None and limit <= 0:
+                        raise StopIteration
+                    row = next(iterator)
+                    text = row[field]
+                    if not isinstance(text, str):
+                        raise ValueError(f'mixture field {field} must contain text')
+                    yield text
+                    if limit is not None:
+                        limit -= 1
+                remaining.append((iterator, field, weight, limit))
+            except StopIteration:
+                continue
+        active = remaining
+
+
+def prepare(output, vocab_size=8192, local_dir=None, dataset_config='wikitext-103-raw-v1', mixture_file=None):
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise ValueError(f'{output} is not empty; use a new data directory')
     if vocab_size < 258:
         raise ValueError('vocab_size must be at least 258 for byte BPE')
+    if local_dir and mixture_file:
+        raise ValueError('local_dir and mixture_file are mutually exclusive')
     if local_dir:
         def local_rows(split):
             with Path(local_dir, f'{split}.txt').open() as handle:
@@ -30,6 +67,12 @@ def prepare(output, vocab_size=8192, local_dir=None, dataset_config='wikitext-10
                     yield line.rstrip('\r\n')
         texts = {s: (lambda s=s: local_rows(s)) for s in ('train', 'validation', 'test')}
         source = {'local_files': {s: digest(Path(local_dir, f'{s}.txt')) for s in texts}}
+    elif mixture_file:
+        mixture = json.loads(Path(mixture_file).read_text())
+        if set(mixture) != {'train', 'validation', 'test'} or not all(isinstance(mixture[s], list) for s in mixture):
+            raise ValueError('mixture file must contain train, validation and test source lists')
+        texts = {s: (lambda s=s: _mixture_rows(mixture[s])) for s in ('train', 'validation', 'test')}
+        source = {'mixture_file_sha256': digest(mixture_file), 'mixture': mixture}
     else:
         from datasets import load_dataset
         ds = load_dataset('Salesforce/wikitext', dataset_config, revision=DATASET_REVISION)

@@ -23,6 +23,7 @@ def main():
     p.add_argument('--output', default='data/wikitext103')
     p.add_argument('--vocab-size', type=int, default=8192)
     p.add_argument('--local-dir', help='Folder containing train.txt, validation.txt, test.txt')
+    p.add_argument('--mixture-file', help='JSON source lists for a mixed pretraining corpus')
     p.add_argument('--dataset-config', default='wikitext-103-raw-v1', choices=['wikitext-2-raw-v1', 'wikitext-103-raw-v1'])
     for name in ('train', 'compare'):
         p = sub.add_parser(name)
@@ -66,13 +67,25 @@ def main():
     p.add_argument('--temperature', type=float, default=0.8)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--device', default='auto')
+    p = sub.add_parser('capability-eval')
+    p.add_argument('--checkpoint', required=True)
+    p.add_argument('--tokenizer', default='data/wikitext103/tokenizer.json')
+    p.add_argument('--output', required=True)
+    p.add_argument('--tasks', default='hellaswag,arc_easy')
+    p.add_argument('--limit', type=int, default=500)
+    p.add_argument('--max-new-tokens', type=int, default=128)
+    p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--device', default='auto')
     p = sub.add_parser('check')
     p.add_argument('--require-cuda', action='store_true')
     p.add_argument('--require-h100', action='store_true',
                    help='require a selected H100 with at least 75 GiB and BF16 support')
     a = parser.parse_args()
     if a.command == 'prepare':
-        print(json.dumps(prepare(a.output, a.vocab_size, a.local_dir, a.dataset_config), indent=2))
+        args = (a.output, a.vocab_size, a.local_dir, a.dataset_config)
+        if a.mixture_file:
+            args += (a.mixture_file,)
+        print(json.dumps(prepare(*args), indent=2))
     elif a.command == 'train':
         kwargs = {'calibration': True} if a.calibration else {}
         print(json.dumps(train(a.config, a.data, a.output, a.architecture, a.resume, a.stop_after, **kwargs), indent=2))
@@ -136,6 +149,16 @@ def main():
                 if token.item() == tokenizer.token_to_id('<eos>'):
                     break
         print(tokenizer.decode(ids))
+    elif a.command == 'capability-eval':
+        from .capabilities import run_capability_evaluation
+        device = device_for(a.device)
+        model, ck = restored(a.checkpoint, device)
+        if digest(a.tokenizer) != ck['manifest']['tokenizer_sha256']:
+            raise ValueError('checkpoint/tokenizer mismatch')
+        tasks = [task.strip() for task in a.tasks.split(',') if task.strip()]
+        print(json.dumps(run_capability_evaluation(
+            model, Tokenizer.from_file(a.tokenizer), a.output, tasks, a.limit, device,
+            a.max_new_tokens, a.seed), indent=2))
     elif a.command == 'check':
         available = torch.cuda.is_available()
         devices = [{'name': torch.cuda.get_device_name(i),

@@ -1,0 +1,42 @@
+{
+  "train": [
+    {
+      "dataset": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "revision": "f776294184f13b8ff2337b3841cf9269a6216d1e",
+      "split": "train",
+      "text_field": "text",
+      "weight": 1,
+      "streaming": true
+    },
+    {
+      "dataset": "allenai/c4",
+      "config": "en",
+      "split": "train",
+      "text_field": "text",
+      "weight": 3,
+      "max_rows": 1000000,
+      "streaming": true
+    }
+  ],
+  "validation": [
+    {
+      "dataset": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "revision": "f776294184f13b8ff2337b3841cf9269a6216d1e",
+      "split": "validation",
+      "text_field": "text",
+      "streaming": true
+    }
+  ],
+  "test": [
+    {
+      "dataset": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "revision": "f776294184f13b8ff2337b3841cf9269a6216d1e",
+      "split": "test",
+      "text_field": "text",
+      "streaming": true
+    }
+  ]
+}

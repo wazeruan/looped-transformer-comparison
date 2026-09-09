@@ -39,6 +39,12 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a comp
 
 Preparation now defaults to `wikitext-103-raw-v1` under `data/wikitext103`. Existing WikiText-2 data does not become WikiText-103: prepare the new directory once. Fresh larger-data training cannot resume the old tokenizer/checkpoints.
 
+For a more diverse pretraining corpus, use a new data directory and a source-mixture JSON file. The checked-in example combines WikiText-103 with streamed English C4 while keeping WikiText validation and test sets held out. Review the data-source terms and adjust `max_rows` before a full run.
+
+```bash
+./scripts/prepare.sh --output data/wiki-c4 --mixture-file configs/data-mixture-wiki-c4.example.json
+```
+
 The lock selects PyTorch 2.14.0 with CUDA 13 Linux dependencies and glibc 2.28+ wheels. CUDA 13 normally needs an R580-or-newer NVIDIA driver; see [NVIDIA compatibility guidance](https://docs.nvidia.com/deploy/cuda-compatibility/latest/forward-compatibility.html). `setup.sh` uses the project-local Python 3.12 environment and committed `uv.lock`. It does not change the host driver. The H100 preset requires BF16; verify the CUDA build and visible device using `check.sh`. On an older cluster runtime, resolve a compatible PyTorch build before both arms, rather than mixing runtimes between models.
 
 `scripts/train.sh` begins with the same hardware check and exits before calibration or run-directory creation unless the selected CUDA device reports H100, exposes at least 75 GiB, and supports BF16. This catches SSH login nodes, CPU-only PyTorch installations, other GPU types, and restricted H100 partitions. On a scheduled cluster, run it inside an H100 allocation through `sbatch scripts/train.sbatch`.
@@ -127,6 +133,20 @@ To render or refresh graphs for an existing run:
 The plotting command is a one-shot CPU operation and does not modify checkpoints or metrics. It tolerates an incomplete final JSONL line, which is useful after an interrupted job. For a completed run, the graph files remain in the run directory for download or inspection.
 
 Results report parameter counts, the optimizer recipe, held-out loss/perplexity, training tokens, training-only throughput and peak CUDA allocation. Training time synchronizes CUDA and includes batch construction/optimizer work, excluding evaluation and saving. Peak allocation includes evaluation, can vary after resume, and is not total process VRAM.
+
+## Capability evaluation
+
+`capability-eval` evaluates zero-shot multiple choice accuracy on HellaSwag (commonsense reasoning) and ARC-Easy (science Q&A), then writes six fixed-prompt writing samples. It saves machine-readable results to `capabilities.json`; writing samples are for human comparison rather than an automatic quality claim. Run it in a Slurm GPU allocation after training:
+
+```bash
+srun uv run --no-sync python -m looped_transformer_comparison.cli capability-eval \
+  --checkpoint runs/param-compute-matched/standard/best.pt \
+  --tokenizer data/wiki-c4/tokenizer.json \
+  --output runs/param-compute-matched/capabilities/standard \
+  --limit 500
+```
+
+Repeat for `looped/best.pt`, using the same tokenizer, task limit, prompt set and seed. These are base-language-model tests, not evidence of instruction following or chain-of-thought reasoning; do not fine-tune either model before comparing them.
 
 ```bash
 ./scripts/evaluate.sh --checkpoint runs/h100-350m-wiki103-8h/standard/best.pt
