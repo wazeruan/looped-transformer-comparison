@@ -1,0 +1,43 @@
+{
+  "experiment": "parameter- and measured-compute-matched WikiText-103 Muon comparison",
+  "budget": "per-architecture optimizer steps allocated from calibration timing",
+  "dataset": "Salesforce/wikitext:wikitext-103-raw-v1@f776294184f13b8ff2337b3841cf9269a6216d1e",
+  "tokenizer_sha256": "130126fd79c8888a6ca0b272ac0b661d5061f374bc970e36bace5b6eab6ce4a2",
+  "training": {
+    "optimizer": "Muon for block matrices plus AdamW for embeddings, normalization, and biases",
+    "precision": "bf16",
+    "seed": 42
+  },
+  "standard": {
+    "parameters": 350451328,
+    "width": 1088,
+    "heads": 17,
+    "effective_depth": 24,
+    "unique_layers": 24,
+    "steps": 29722,
+    "train_tokens": 486965248,
+    "best_step": 25500,
+    "best_validation_loss": 2.783191354931313,
+    "test_loss": 2.797761515415245,
+    "test_perplexity": 16.407876852600012,
+    "train_seconds": 9479.126347390935,
+    "peak_cuda_allocated_bytes": 6142803968
+  },
+  "looped": {
+    "parameters": 350519232,
+    "width": 2148,
+    "heads": 12,
+    "effective_depth": 24,
+    "unique_layers": 6,
+    "loops": 4,
+    "steps": 10522,
+    "train_tokens": 172392448,
+    "best_step": 10522,
+    "best_validation_loss": 2.8129696829690634,
+    "test_loss": 2.8237191693697947,
+    "test_perplexity": 16.83936279581234,
+    "train_seconds": 12474.217905673431,
+    "peak_cuda_allocated_bytes": 7437745152
+  },
+  "looped_minus_standard_test_loss": 0.02595765395454963
+}

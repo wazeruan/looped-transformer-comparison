@@ -1,0 +1,39 @@
+{
+  "experiment": "equal-token WikiText-103 Muon comparison",
+  "budget": "equal optimizer steps and tokens",
+  "dataset": "Salesforce/wikitext:wikitext-103-raw-v1@f776294184f13b8ff2337b3841cf9269a6216d1e",
+  "tokenizer_sha256": "130126fd79c8888a6ca0b272ac0b661d5061f374bc970e36bace5b6eab6ce4a2",
+  "training": {
+    "optimizer": "Muon for block matrices plus AdamW for embeddings, normalization, and biases",
+    "precision": "bf16",
+    "seed": 42,
+    "steps": 36863,
+    "tokens_per_model": 603963392
+  },
+  "standard": {
+    "parameters": 350451328,
+    "effective_depth": 24,
+    "unique_layers": 24,
+    "best_step": 25500,
+    "best_validation_loss": 2.7832078013641444,
+    "test_loss": 2.8011469363212353,
+    "test_perplexity": 16.463518554066614,
+    "train_seconds": 12062.102276476566,
+    "train_tokens_per_second": 50071.15494102927,
+    "peak_cuda_allocated_bytes": 6142803968
+  },
+  "looped": {
+    "parameters": 94508032,
+    "effective_depth": 24,
+    "unique_layers": 6,
+    "loops": 4,
+    "best_step": 36863,
+    "best_validation_loss": 2.7684976976998805,
+    "test_loss": 2.78317328974285,
+    "test_perplexity": 16.170252515179154,
+    "train_seconds": 9794.55591864558,
+    "train_tokens_per_second": 61663.172584502216,
+    "peak_cuda_allocated_bytes": 2563375104
+  },
+  "looped_minus_standard_test_loss": -0.017973646578385516
+}
