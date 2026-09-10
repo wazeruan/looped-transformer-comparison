@@ -115,6 +115,23 @@ sbatch scripts/train.sbatch --config configs/h100-param-matched-8h.json \
 
 In this mode, token totals can differ by design. The comparison report checks the shared data and optimizer recipe, reports each architecture's actual tokens and steps, and still produces the full training graphs.
 
+### Equal-token seed replications
+
+The completed seed-42 equal-token run is the reference result. Submit seeds 43 and 44 with the same model shape, data, Muon recipe, and token-matching planner using the noninteractive sweep wrapper. It atomically claims a dated parent directory, writes a submission receipt, and never stores your Slurm account or partition in Git.
+
+```bash
+./scripts/submit_equal_token_seeds.sh \
+  --account YOUR_ACCOUNT --partition YOUR_PARTITION
+```
+
+The wrapper prints each job ID and records its result paths under `runs/equal-token-seeds-<UTC timestamp>/`. Use the receipt to inspect results after the jobs finish:
+
+```bash
+squeue -u "$USER"
+sacct -j JOB_ID --format=JobID,JobName,State,ExitCode,Elapsed
+tail -n 200 runs/equal-token-seeds-<UTC timestamp>/logs/train-<timestamp>-seed43-JOB_ID.out
+```
+
 ## Interruptions and resume
 
 ```bash

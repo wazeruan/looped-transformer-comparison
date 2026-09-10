@@ -1,0 +1,32 @@
+{
+  "model": {
+    "vocab_size": 8192,
+    "seq_len": 256,
+    "width": 1088,
+    "heads": 17,
+    "depth": 24,
+    "loop_layers": 6,
+    "loops": 4,
+    "dropout": 0.0
+  },
+  "training": {
+    "steps": 1000000,
+    "batch_size": 4,
+    "grad_accum": 16,
+    "lr": 0.0003,
+    "min_lr": 3e-05,
+    "warmup_steps": 1000,
+    "weight_decay": 0.1,
+    "grad_clip": 1.0,
+    "eval_every": 500,
+    "log_every": 10,
+    "seed": 43,
+    "device": "auto",
+    "precision": "bf16",
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_nesterov": true,
+    "muon_ns_steps": 5,
+    "muon_adjust_lr": "match_rms_adamw"
+  }
+}
