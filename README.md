@@ -24,6 +24,41 @@ The production H100 presets use PyTorch **Muon** for the 2-D weight matrices ins
 
 Both runs use identical seeded batch sequences. Token/position weights and the first six blocks share initial values at the same seed; remaining standard blocks initialize independently. Each model has its own optimizer. GPU execution is not claimed bitwise deterministic. Use multiple seeds for reliable research conclusions.
 
+```mermaid
+flowchart LR
+    I["Token embeddings + learned positions"]
+    O["Tied token-output projection"]
+
+    subgraph S["Standard decoder: 24 unique blocks"]
+        direction LR
+        S1["Block 1"] --> SD["..."] --> S24["Block 24"]
+    end
+
+    subgraph L["Looped decoder: 6 shared blocks, applied 4 times"]
+        direction LR
+        L1["Shared block 1"] --> L2["..."] --> L6["Shared block 6"]
+        L6 -. "repeat shared stack" .-> L1
+    end
+
+    I --> S1
+    I --> L1
+    S24 --> O
+    L6 --> O
+```
+
+Every block contains pre-norm LayerNorm, causal multi-head self-attention, a residual connection, and a GELU MLP with 4× expansion. Muon updates the block weight matrices; AdamW updates embeddings, LayerNorm parameters, and biases.
+
+## Recorded H100 results
+
+Two completed single-seed WikiText-103 experiments are recorded in [`results/`](results/). Both used BF16, the mixed Muon/AdamW recipe, the same tokenizer, and one H100 80GB GPU.
+
+| Experiment | Standard | Looped | Outcome |
+|---|---:|---:|---|
+| Equal tokens; 350.5M vs 94.5M parameters | Test loss 2.8011, PPL 16.4635 | **Test loss 2.7832, PPL 16.1703** | Smaller looped model was better and faster at the same 604.0M tokens. |
+| Parameter matched; measured-compute budget | **Test loss 2.7978, PPL 16.4079** | Test loss 2.8237, PPL 16.8394 | Standard model was better when both models had about 350.5M parameters. |
+
+The parameter-matched looped model uses width 2,148 and 12 heads, compared with width 1,088 and 17 heads for standard; it has 350,519,232 parameters versus 350,451,328. The compute-matched run intentionally assigns different step and token counts after calibration, because the wider looped model costs more per step. See [`results/equal-token-wiki103-muon.json`](results/equal-token-wiki103-muon.json) and [`results/parameter-compute-matched-wiki103-muon.json`](results/parameter-compute-matched-wiki103-muon.json) for exact metrics. Neither result is statistical evidence until replicated across seeds.
+
 ## H100 quick start
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a compatible NVIDIA driver. Clone/update this repository and enter its root:
